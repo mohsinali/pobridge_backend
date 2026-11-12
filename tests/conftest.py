@@ -11,6 +11,8 @@ TEST_ENVIRONMENT = {
     "OPENAI_API_KEY": "",
     "OPENAI_MODEL": "",
     "MAX_UPLOAD_SIZE_MB": "10",
+    "MAX_PDF_PAGES": "25",
+    "OPENAI_TIMEOUT_SECONDS": "90",
 }
 
 for variable, value in TEST_ENVIRONMENT.items():

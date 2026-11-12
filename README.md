@@ -7,6 +7,8 @@ POBridge is an AI-powered purchase order processing and ERP automation applicati
 - Python 3.12.11
 - FastAPI and Uvicorn
 - Pydantic v2 and pydantic-settings
+- OpenAI Python SDK using the Responses API
+- PyMuPDF for defensive PDF inspection
 - pytest and HTTPX
 
 ## Structure
@@ -21,7 +23,8 @@ app/
 tests/            # Automated API tests
 ```
 
-The feature modules are intentionally empty placeholders for later development phases.
+The extraction module accepts one validated PDF, calls a replaceable AI provider once,
+and returns typed purchase-order data with deterministic and model-reported warnings.
 
 ## Local setup
 
@@ -48,7 +51,21 @@ Create the local environment file from the safe example:
 cp .env.example .env
 ```
 
-The default configuration works for local development. `OPENAI_API_KEY` and `OPENAI_MODEL` may remain empty because AI integration is not enabled yet. Never commit credentials or the `.env` file.
+Set these extraction values in `.env`:
+
+```env
+OPENAI_API_KEY=your-api-key
+OPENAI_MODEL=gpt-6-luna
+MAX_UPLOAD_SIZE_MB=10
+MAX_PDF_PAGES=25
+OPENAI_TIMEOUT_SECONDS=90
+```
+
+`gpt-6-luna` is the documented default because this is a focused, cost-sensitive
+extraction workload. The model remains configurable so accuracy and cost can be
+benchmarked without code changes. A missing API key does not affect application startup
+or health checks; only the extraction endpoint returns a configuration error. Never
+commit credentials or the `.env` file.
 
 ## Run the API
 
@@ -58,6 +75,23 @@ uvicorn app.main:app --reload
 
 The API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs), and the health endpoint is available at [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health).
 
+## Extract a purchase order
+
+The endpoint accepts one PDF of at most 10 MB and 25 pages by default. It validates the
+extension, MIME type, PDF signature, parseability, encryption state, and page count
+before calling OpenAI. Decimal quantities and money values are returned as JSON strings.
+
+```bash
+curl --fail-with-body \
+  -X POST http://localhost:8000/api/v1/purchase-orders/extract \
+  -H 'Accept: application/json' \
+  -F 'file=@/absolute/path/to/sample-po.pdf;type=application/pdf'
+```
+
+For an optional manual integration test, add a real `OPENAI_API_KEY` to `.env`, start
+Uvicorn, and run the command above with a non-sensitive sample PO. This is the only test
+that incurs API usage; the automated suite injects fake providers and makes no paid calls.
+
 ## Run tests
 
 ```bash
@@ -65,3 +99,10 @@ pytest
 ```
 
 Tests run locally without databases, external services, or API credentials.
+
+## MVP limitations
+
+Extraction is synchronous and uses the source PDF as provided. There is no OCR
+preprocessing, rotation correction, persistence, retry queue, ERP matching, pricing
+validation, or automatic total calculation. Scanned or visually difficult documents may
+therefore extract less accurately and should be evaluated with representative samples.
