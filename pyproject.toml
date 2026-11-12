@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pobridge-backend"
+version = "0.1.0"
+description = "AI-powered Purchase Order Processing and ERP Automation"
+readme = "README.md"
+requires-python = ">=3.12.11,<3.13"
+dependencies = [
+    "fastapi==0.115.12",
+    "pydantic==2.11.4",
+    "pydantic-settings==2.9.1",
+    "python-multipart==0.0.20",
+    "uvicorn[standard]==0.34.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx==0.28.1",
+    "pytest==8.3.5",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+pythonpath = ["."]
