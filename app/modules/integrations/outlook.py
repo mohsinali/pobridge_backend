@@ -6,8 +6,11 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
+
+import httpx
 
 from app.modules.integrations.crypto import SecretCipher
 from app.modules.integrations.microsoft import MicrosoftOAuthClient
@@ -29,10 +32,40 @@ class ConnectionOwnedByAnotherSession(Exception):
     """The local single-user connection is bound to another browser session."""
 
 
+class OutlookNotConnected(Exception):
+    """No Outlook connection exists for the current session."""
+
+
+class OutlookAuthorizationExpired(Exception):
+    """Microsoft no longer accepts the stored authorization."""
+
+
+class OutlookRateLimited(Exception):
+    """Microsoft Graph rate-limited the request."""
+
+
+class OutlookRequestTimedOut(Exception):
+    """The request to Microsoft timed out."""
+
+
+class OutlookProviderError(Exception):
+    """Microsoft Graph failed or returned an invalid response."""
+
+
 @dataclass(frozen=True)
 class ConnectionStatus:
     connected: bool
     email: str | None = None
+
+
+@dataclass(frozen=True)
+class OutlookEmail:
+    id: str
+    sender_name: str | None
+    sender_email: str | None
+    subject: str | None
+    received_at: datetime
+    has_attachments: bool
 
 
 class OutlookIntegrationService:
@@ -169,3 +202,146 @@ class OutlookIntegrationService:
         return self._repository.delete_connection(
             provider=PROVIDER, owner_session_hash=connection.owner_session_hash
         )
+
+    async def get_emails(self, session_id: str) -> list[OutlookEmail]:
+        connection = self._repository.get_connection(PROVIDER)
+        if connection is None:
+            raise OutlookNotConnected
+        if connection.owner_session_hash != self.hash_secret(session_id):
+            raise ConnectionOwnedByAnotherSession
+
+        try:
+            credentials = json.loads(self._cipher.decrypt(connection.encrypted_credentials))
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise OutlookAuthorizationExpired from exc
+        if not isinstance(credentials, dict):
+            raise OutlookAuthorizationExpired
+
+        try:
+            if self._credentials_expired(credentials):
+                credentials = await self._refresh_credentials(connection, credentials)
+
+            access_token = credentials.get("access_token")
+            if not isinstance(access_token, str):
+                raise OutlookAuthorizationExpired
+            try:
+                payload = await self._microsoft.get_inbox_messages(access_token)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 401:
+                    raise
+                credentials = await self._refresh_credentials(connection, credentials)
+                refreshed_token = credentials.get("access_token")
+                if not isinstance(refreshed_token, str):
+                    raise OutlookAuthorizationExpired
+                payload = await self._microsoft.get_inbox_messages(refreshed_token)
+        except OutlookAuthorizationExpired:
+            raise
+        except httpx.TimeoutException as exc:
+            raise OutlookRequestTimedOut from exc
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                raise OutlookAuthorizationExpired from exc
+            if exc.response.status_code == 429:
+                raise OutlookRateLimited from exc
+            raise OutlookProviderError from exc
+        except httpx.HTTPError as exc:
+            raise OutlookProviderError from exc
+        except (TypeError, ValueError) as exc:
+            raise OutlookProviderError from exc
+
+        return self._normalize_messages(payload)
+
+    @staticmethod
+    def _credentials_expired(credentials: dict[str, Any]) -> bool:
+        obtained_at = credentials.get("obtained_at")
+        expires_in = credentials.get("expires_in")
+        if not isinstance(obtained_at, (int, float)) or not isinstance(
+            expires_in, (int, float)
+        ):
+            return False
+        return time.time() >= obtained_at + expires_in - 60
+
+    async def _refresh_credentials(
+        self, connection: IntegrationConnection, credentials: dict[str, Any]
+    ) -> dict[str, Any]:
+        refresh_token = credentials.get("refresh_token")
+        if not isinstance(refresh_token, str):
+            raise OutlookAuthorizationExpired
+        try:
+            refreshed = await self._microsoft.refresh_access_token(refresh_token)
+        except httpx.TimeoutException as exc:
+            raise OutlookRequestTimedOut from exc
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (400, 401):
+                raise OutlookAuthorizationExpired from exc
+            if exc.response.status_code == 429:
+                raise OutlookRateLimited from exc
+            raise OutlookProviderError from exc
+        except httpx.HTTPError as exc:
+            raise OutlookProviderError from exc
+
+        if not isinstance(refreshed, dict):
+            raise OutlookProviderError
+        access_token = refreshed.get("access_token")
+        if not isinstance(access_token, str):
+            raise OutlookAuthorizationExpired
+        updated = {
+            **credentials,
+            **refreshed,
+            "refresh_token": refreshed.get("refresh_token", refresh_token),
+            "obtained_at": int(time.time()),
+        }
+        saved = self._repository.save_connection(
+            IntegrationConnection(
+                provider=connection.provider,
+                owner_session_hash=connection.owner_session_hash,
+                account_id=connection.account_id,
+                email=connection.email,
+                display_name=connection.display_name,
+                encrypted_credentials=self._cipher.encrypt(
+                    json.dumps(updated, separators=(",", ":"))
+                ),
+            )
+        )
+        if not saved:
+            raise ConnectionOwnedByAnotherSession
+        return updated
+
+    @staticmethod
+    def _normalize_messages(payload: dict[str, Any]) -> list[OutlookEmail]:
+        values = payload.get("value") if isinstance(payload, dict) else None
+        if not isinstance(values, list):
+            raise OutlookProviderError
+
+        emails: list[OutlookEmail] = []
+        for value in values:
+            if not isinstance(value, dict):
+                raise OutlookProviderError
+            message_id = value.get("id")
+            received_at = value.get("receivedDateTime")
+            if not isinstance(message_id, str) or not isinstance(received_at, str):
+                raise OutlookProviderError
+            try:
+                received_datetime = datetime.fromisoformat(
+                    received_at.replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise OutlookProviderError from exc
+            sender = value.get("from")
+            email_address = sender.get("emailAddress") if isinstance(sender, dict) else None
+            sender_name = email_address.get("name") if isinstance(email_address, dict) else None
+            sender_email = (
+                email_address.get("address") if isinstance(email_address, dict) else None
+            )
+            subject = value.get("subject")
+            emails.append(
+                OutlookEmail(
+                    id=message_id,
+                    sender_name=sender_name if isinstance(sender_name, str) else None,
+                    sender_email=sender_email if isinstance(sender_email, str) else None,
+                    subject=subject if isinstance(subject, str) else None,
+                    received_at=received_datetime,
+                    has_attachments=value.get("hasAttachments") is True,
+                )
+            )
+        return emails

@@ -15,9 +15,15 @@ from app.modules.integrations.microsoft import HTTPMicrosoftOAuthClient
 from app.modules.integrations.outlook import (
     ConnectionOwnedByAnotherSession,
     OAuthCallbackError,
+    OutlookAuthorizationExpired,
     OutlookIntegrationService,
+    OutlookNotConnected,
+    OutlookProviderError,
+    OutlookRateLimited,
+    OutlookRequestTimedOut,
 )
 from app.modules.integrations.repository import SQLiteIntegrationRepository
+from app.schemas.email import EmailListResponse, EmailSummary
 
 router = APIRouter(prefix="/integrations/outlook", tags=["integrations"])
 SESSION_COOKIE = "pobridge_integration_session"
@@ -149,6 +155,49 @@ def connection_status(
     except ConnectionOwnedByAnotherSession as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Connection belongs to another local session") from exc
     return OutlookStatusResponse(connected=current.connected, email=current.email)
+
+
+@router.get("/emails", response_model=EmailListResponse)
+async def emails(
+    session_id: str = Depends(require_session),
+    service: OutlookIntegrationService = Depends(require_service),
+) -> EmailListResponse:
+    try:
+        messages = await service.get_emails(session_id)
+    except OutlookNotConnected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Outlook account is not connected",
+        ) from exc
+    except ConnectionOwnedByAnotherSession as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Connection belongs to another local session",
+        ) from exc
+    except OutlookAuthorizationExpired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Outlook authorization expired; reconnect the account",
+        ) from exc
+    except OutlookRateLimited as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Microsoft Graph rate limit exceeded",
+        ) from exc
+    except OutlookRequestTimedOut as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Microsoft Graph request timed out",
+        ) from exc
+    except OutlookProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Microsoft Graph request failed",
+        ) from exc
+    return EmailListResponse(
+        provider="outlook",
+        emails=[EmailSummary(**message.__dict__) for message in messages],
+    )
 
 
 @router.post("/disconnect", response_model=OutlookStatusResponse)
