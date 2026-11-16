@@ -9,7 +9,9 @@ description = "AI-powered Purchase Order Processing and ERP Automation"
 readme = "README.md"
 requires-python = ">=3.12.11,<3.13"
 dependencies = [
+    "cryptography==44.0.3",
     "fastapi==0.115.12",
+    "httpx==0.28.1",
     "openai==3.49.0",
     "pydantic==2.11.4",
     "pydantic-settings==2.9.1",
@@ -20,7 +22,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "httpx==0.28.1",
     "pytest==8.3.5",
 ]
 

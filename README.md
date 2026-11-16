@@ -10,6 +10,7 @@ POBridge is an AI-powered purchase order processing and ERP automation applicati
 - OpenAI Python SDK using the Responses API
 - PyMuPDF for defensive PDF inspection
 - pytest and HTTPX
+- SQLite for local integration persistence and Fernet authenticated encryption
 
 ## Structure
 
@@ -66,6 +67,45 @@ extraction workload. The model remains configurable so accuracy and cost can be
 benchmarked without code changes. A missing API key does not affect application startup
 or health checks; only the extraction endpoint returns a configuration error. Never
 commit credentials or the `.env` file.
+
+## Outlook OAuth integration
+
+Register a Microsoft identity platform web application with support for both
+organizational and personal Microsoft accounts. Add the exact callback URL as a web
+redirect URI, then configure:
+
+```env
+MICROSOFT_CLIENT_ID=your-application-client-id
+MICROSOFT_CLIENT_SECRET=your-client-secret
+MICROSOFT_AUTHORITY=https://login.microsoftonline.com/common
+MICROSOFT_REDIRECT_URI=http://localhost:8000/api/v1/integrations/outlook/callback
+INTEGRATION_ENCRYPTION_KEY=your-fernet-key
+INTEGRATION_DATABASE_PATH=data/integrations.db
+INTEGRATION_COOKIE_SECURE=false
+OAUTH_TRANSACTION_TTL_SECONDS=600
+```
+
+Generate a new encryption key once and keep it stable alongside the other local
+secrets. Changing it makes existing encrypted credentials unreadable:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+The integration requests delegated `openid`, `profile`, `email`, `User.Read`,
+`Mail.Read`, and `offline_access` scopes using Authorization Code Flow with PKCE. The
+frontend starts the flow at `GET /api/v1/integrations/outlook/connect`; callback,
+status, and disconnect are exposed under the same route prefix. Tokens are never
+returned by the API and are stored encrypted in the local SQLite database.
+
+This is intentionally a single-user local-development integration, not an
+authentication system. The first browser session to connect owns the sole Outlook
+record through a high-entropy HttpOnly, SameSite cookie; other sessions cannot inspect,
+replace, or disconnect it, and disconnect additionally requires the configured frontend
+Origin. Run only on a trusted loopback machine. For plain HTTP localhost,
+`INTEGRATION_COOKIE_SECURE=false` is necessary; set it to `true` whenever the backend is
+served over HTTPS. A production deployment still requires real user authentication,
+per-user ownership, HTTPS, a managed database, and managed secret/key storage.
 
 ## Run the API
 

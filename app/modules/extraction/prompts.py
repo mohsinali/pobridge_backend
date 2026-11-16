@@ -18,6 +18,16 @@ Rules:
 - Prefer an explicitly labeled customer part number when the document distinguishes it
   from a supplier part number; do not conflate the two.
 - Preserve quantity meaning, decimal precision, UOM, and line-item document order.
+- For every monetary field (unit price, line total, subtotal, tax, shipping cost, and
+  grand total), emit a Decimal-compatible numeric string with no currency symbol or
+  thousands separator and with a period as the decimal separator.
+- In US-formatted amounts, commas separate thousands and periods separate decimals.
+  Normalize `5,820.00` to `5820.00`, `$17,650.00` to `17650.00`, and `485.00` to
+  `485.00`; never reinterpret the US thousands separator as a decimal separator.
+- Support another number format only when its thousands and decimal separators are
+  unambiguous from the document context. Do not blindly remove commas. If a monetary
+  format is ambiguous, return null for that field and add an extraction warning rather
+  than guessing.
 - Extract shipping cost only when the source explicitly states a monetary shipping or
   freight charge. If freight is TBD, unknown, or otherwise unspecified, emit null for
   shipping_cost, preserve the relevant source text in shipping notes, and add a warning.

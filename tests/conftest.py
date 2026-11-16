@@ -13,6 +13,7 @@ TEST_ENVIRONMENT = {
     "MAX_UPLOAD_SIZE_MB": "10",
     "MAX_PDF_PAGES": "25",
     "OPENAI_TIMEOUT_SECONDS": "90",
+    "INTEGRATION_COOKIE_SECURE": "false",
 }
 
 for variable, value in TEST_ENVIRONMENT.items():

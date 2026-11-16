@@ -48,6 +48,9 @@ def test_provider_sends_one_base64_pdf_structured_request() -> None:
     assert request["store"] is False
     assert request["text_format"] is StructuredPurchaseOrderExtraction
     assert "If freight is TBD, unknown, or otherwise unspecified" in request["instructions"]
+    assert "Normalize `5,820.00` to `5820.00`" in request["instructions"]
+    assert "Do not blindly remove commas" in request["instructions"]
+    assert "return null for that field and add an extraction warning" in request["instructions"]
     file_input = request["input"][0]["content"][0]
     assert file_input["filename"] == "sample.pdf"
     assert file_input["file_data"].startswith("data:application/pdf;base64,")
